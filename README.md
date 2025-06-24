@@ -19,4 +19,4 @@ Windows
 `uv init server && cd server && uv venv && .venv\Scripts\activatee && uv add mcp[cli] httpx && del main.py && touch server.py && cd ..`
 
 ## Run
-`uv run client.py ../server/server.py`
+From root: `uv run --project client python client/client.py server/server.py`

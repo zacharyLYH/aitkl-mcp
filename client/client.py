@@ -36,7 +36,7 @@ class MCPAPIClient:
         # Initialize Gemini service
         self.gemini_service = GeminiService()
         self.connected_server: Optional[str] = None
-        self.server_script_path: Optional[str] = "../server/server.py"
+        self.server_script_path: Optional[str] = "server/server.py"
 
     async def connect_to_server(self):
         """Connect to an MCP server"""
