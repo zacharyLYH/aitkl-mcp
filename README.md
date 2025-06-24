@@ -17,3 +17,6 @@ Non-windows
 `uv init server && cd server && uv venv && source .venv/bin/activate && uv add "mcp[cli]" httpx && rm -rf main.py && touch server.py && cd ..`
 Windows
 `uv init server && cd server && uv venv && .venv\Scripts\activatee && uv add mcp[cli] httpx && del main.py && touch server.py && cd ..`
+
+## Run
+`uv run client.py ../server/server.py`
