@@ -20,3 +20,11 @@ Windows
 
 ## Run
 From root: `uv run --project client python client/client.py server/server.py`
+
+## Suggested questions
+1. What public holidays are there in US 2025?
+2. Whats the weather like in Phoenix, Arizona?
+3. Tell me more about the USA!
+4. What restaurants are in Phoenix, Arizona?
+5. I'll need 4000USD for my trip. How much is that in malaysian ringgit?
+6. Create a travel summary for my trip to Phoenix, Arizona!

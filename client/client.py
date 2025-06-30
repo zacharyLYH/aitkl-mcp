@@ -154,17 +154,14 @@ class MCPAPIClient:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error calling Gemini API: {str(e)}")
 
-        # Process response and handle tool calls
-        final_text, initial_tools_used = self.gemini_service.process_gemini_response(response)
-        tools_used.extend(initial_tools_used)
-
+        final_text = []
         # Handle tool calls from Gemini
         try:
             for part in response.candidates[0].content.parts:
                 if hasattr(part, 'function_call'):
                     tool_name = part.function_call.name
                     tool_args = part.function_call.args
-                    
+                    tools_used.append(tool_name)
                     # Execute tool call
                     try:
                         result = await self.session.call_tool(tool_name, tool_args)

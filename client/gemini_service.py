@@ -9,7 +9,7 @@ class GeminiService:
     def __init__(self):
         # Configure Gemini API
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.model = genai.GenerativeModel(os.getenv('GEMINI_MODEL_NAME'))
 
     def convert_mcp_tools_to_gemini_format(self, mcp_tools: List[Any]) -> List[Dict[str, Any]]:
         """Convert MCP tools to Gemini's FunctionDeclaration format"""
@@ -89,24 +89,3 @@ class GeminiService:
         """Send tool result back to Gemini and get response"""
         message = f"Tool {tool_name} returned: {tool_result}"
         return self.send_message(chat, message)
-
-    def process_gemini_response(self, response: Any) -> tuple[List[str], List[str]]:
-        """Process Gemini response and extract text and function calls"""
-        final_text = []
-        tools_used = []
-        
-        try:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, 'text') and part.text:
-                    final_text.append(part.text)
-                elif hasattr(part, 'function_call'):
-                    tool_name = part.function_call.name
-                    tool_args = part.function_call.args
-                    tools_used.append(tool_name)
-                    
-                    # Add tool call info to text
-                    final_text.append(f"[Called tool {tool_name} with args {tool_args}]")
-        except Exception as e:
-            final_text.append(f"Error processing response: {str(e)}")
-            
-        return final_text, tools_used 
