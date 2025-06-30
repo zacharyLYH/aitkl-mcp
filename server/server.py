@@ -1,7 +1,7 @@
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from mcp.server.fastmcp import FastMCP
-from overpass import get_overpass_url, get_available_poi_types, get_cuisine_types, get_attraction_types
+from overpass import get_overpass_url, get_available_poi_types
 
 # Initialize FastMCP server
 mcp = FastMCP("travel")
@@ -10,12 +10,14 @@ mcp = FastMCP("travel")
 PUBLIC_HOLIDAYS_API = "https://date.nager.at/api/v3"
 WEATHER_API = "https://api.open-meteo.com/v1"
 COUNTRIES_API = "https://restcountries.com/v3.1"
-OVERPASS_API = "https://overpass-api.de/api/interpreter"
 EXCHANGE_RATE_API = "https://api.exchangerate-api.com/v4"
+GEOCODING_API = "https://nominatim.openstreetmap.org/search"
 USER_AGENT = "travel-mcp/1.0"
-LAT_LON="https://nominatim.openstreetmap.org/search"
 
-async def make_request(url: str, params: Optional[dict] = None) -> dict[str, Any] | None:
+# In-memory coordinate cache
+COORDINATE_CACHE: Dict[str, Tuple[float, float]] = {}
+
+async def make_request(url: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Make a request to any API with proper error handling."""
     headers = {
         "User-Agent": USER_AGENT,
@@ -31,49 +33,42 @@ async def make_request(url: str, params: Optional[dict] = None) -> dict[str, Any
             print(f"Error making request to {url}: {e}")
             return None
 
-async def get_coordinates_for_location(location: str) -> Optional[tuple[float, float]]:
-    """Get coordinates for a location using the countries API or geocoding.
+async def get_coordinates_for_location(location: str) -> Optional[Tuple[float, float]]:
+    """Get coordinates for a location using geocoding with caching.
     
-    Example: GET https://nominatim.openstreetmap.org/search?q=Seattle,Washington&format=json&limit=1
+    Example: https://nominatim.openstreetmap.org/search?q=Seattle,Washington&format=json&limit=1
     """
-    # First try to get country coordinates
-    country_data = await make_request(f"{LAT_LON}?q={location}&format=json&limit=1")
+    # Check cache first
+    if location.lower() in COORDINATE_CACHE:
+        return COORDINATE_CACHE[location.lower()]
     
-    if country_data and isinstance(country_data, list) and len(country_data) > 0:
-        country = country_data[0]
-        lat = country.get('lat', [])
-        lon = country.get('lon', [])
+    # Fetch from API
+    params = {"q": location, "format": "json", "limit": 1}
+    data = await make_request(GEOCODING_API, params)
+    
+    if data and isinstance(data, list) and len(data) > 0:
+        result = data[0]
+        lat = result.get('lat')
+        lon = result.get('lon')
         if lat and lon:
-            return lat, lon
+            coords = (float(lat), float(lon))
+            COORDINATE_CACHE[location.lower()] = coords
+            return coords
     
-    # For cities, we could implement a more sophisticated geocoding service
-    # For now, return None if we can't find coordinates
     return None
 
 async def get_weather_forecast(latitude: float, longitude: float, days: int = 7) -> str:
-    """Get weather forecast for a specific location.
-    
-    Args:
-        latitude: Latitude coordinate
-        longitude: Longitude coordinate
-        days: Number of days to forecast (1-16, default 7)
-    
-    Example: GET https://api.open-meteo.com/v1/forecast?latitude=37.7749&longitude=-122.4194&current_weather=true&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max&timezone=auto
-    """
-    url = f"{WEATHER_API}/forecast"
-    
+    """Get weather forecast for specific coordinates."""
     params = {
         "latitude": latitude,
         "longitude": longitude,
         "current_weather": "true",
         "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max",
-        "timezone": "auto"
+        "timezone": "auto",
+        "forecast_days": min(days, 16)
     }
     
-    if days:
-        params["forecast_days"] = min(days, 16)  # API limit is 16 days
-    
-    data = await make_request(url, params)
+    data = await make_request(f"{WEATHER_API}/forecast", params)
     
     if not data:
         return f"Unable to fetch weather data for coordinates ({latitude}, {longitude})."
@@ -81,19 +76,14 @@ async def get_weather_forecast(latitude: float, longitude: float, days: int = 7)
     current = data.get('current_weather', {})
     daily = data.get('daily', {})
     
-    result = f"Summarise this for me. Do not modify or add information.Weather Forecast for ({latitude}, {longitude}):\n\n"
+    result = "Summarise this for me. Do not modify or add information. Weather Forecast:\n\n"
     
     # Current weather
     if current:
-        temp = current.get('temperature', 'Unknown')
-        windspeed = current.get('windspeed', 'Unknown')
-        weather_code = current.get('weathercode', 'Unknown')
-        time = current.get('time', 'Unknown')
-        
-        result += f"🌤️  Current Weather ({time}):\n"
-        result += f"   Temperature: {temp}°C\n"
-        result += f"   Wind Speed: {windspeed} km/h\n"
-        result += f"   Weather Code: {weather_code}\n\n"
+        result += f"Current Weather ({current.get('time', 'Unknown')}):\n"
+        result += f"   Temperature: {current.get('temperature', 'Unknown')}°C\n"
+        result += f"   Wind Speed: {current.get('windspeed', 'Unknown')} km/h\n"
+        result += f"   Weather Code: {current.get('weathercode', 'Unknown')}\n\n"
     
     # Daily forecast
     if daily and 'time' in daily:
@@ -103,7 +93,7 @@ async def get_weather_forecast(latitude: float, longitude: float, days: int = 7)
         precip_prob = daily.get('precipitation_probability_max', [])
         
         result += "📅 Daily Forecast:\n"
-        for i in range(min(len(times), 7)):  # Show next 7 days
+        for i in range(min(len(times), 7)):
             date = times[i]
             max_temp = temp_max[i] if i < len(temp_max) else 'Unknown'
             min_temp = temp_min[i] if i < len(temp_min) else 'Unknown'
@@ -117,21 +107,25 @@ async def get_weather_forecast(latitude: float, longitude: float, days: int = 7)
 async def get_public_holidays(year: int, country_code: str) -> str:
     """Get public holidays for a specific country and year.
     
-    Args:
-        year: Year to get holidays for (e.g., 2024)
-        country_code: Two letter country code (e.g., 'US', 'GB', 'DE')
-    """
-    url = f"{PUBLIC_HOLIDAYS_API}/PublicHolidays/{year}/{country_code}"
+    This tool fetches official public holidays from the date.nager.at API, providing
+    comprehensive holiday information including local names and dates for planning
+    travel around national celebrations and observances.
     
-    data = await make_request(url)
+    Args:
+        year: Year to get holidays for (e.g., 2024, 2025)
+        country_code: Two letter country code (e.g., 'US', 'GB', 'DE', 'JP', 'AU')
+    
+    Example: https://date.nager.at/api/v3/PublicHolidays/2025/US
+    """
+    data = await make_request(f"{PUBLIC_HOLIDAYS_API}/PublicHolidays/{year}/{country_code}")
     
     if not data:
-        return f"Tell the user that the public holidays API is not working."
+        return f"The public holidays API is not working for {country_code} in {year}."
     
     if len(data) == 0:
-        return f"Tell the user that no public holidays were found for {country_code} in {year}."
+        return f"No public holidays were found for {country_code} in {year}."
     
-    result = f"According to the official public holidays API, these are the public holidays in {country_code} for {year}:\n\n"
+    result = f"Summarise this for me. Do not modify or add information. Public holidays in {country_code} for {year}:\n\n"
     
     for holiday in data[:15]:  # Limit to 15 holidays
         name = holiday.get('name', 'Unknown')
@@ -146,17 +140,21 @@ async def get_public_holidays(year: int, country_code: str) -> str:
     if len(data) > 15:
         result += f"\n... and {len(data) - 15} more holidays"
     
-    result += "\n\nPlease do not add or modify any information and ONLY summarize the public holidays in a way that is easy to understand and use."
-    
     return result
 
 @mcp.tool()
 async def get_weather_by_location(location: str, days: int = 7) -> str:
     """Get weather forecast for a location by name.
     
+    This tool provides detailed weather forecasts including current conditions,
+    daily temperature ranges, precipitation probability, and wind speeds.
+    Perfect for travel planning and understanding local weather patterns.
+    
     Args:
-        location: Location name (country, city, etc.)
+        location: Location name (country, city, etc.) - e.g., 'Paris', 'Tokyo', 'New York'
         days: Number of days to forecast (1-16, default 7)
+    
+    Example: https://api.open-meteo.com/v1/forecast?latitude=37.7749&longitude=-122.4194&current_weather=true&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max&timezone=auto
     """
     coords = await get_coordinates_for_location(location)
     
@@ -170,20 +168,21 @@ async def get_weather_by_location(location: str, days: int = 7) -> str:
 async def get_country_info(country_name: str) -> str:
     """Get detailed information about a specific country.
     
+    This tool provides comprehensive country information including official names,
+    capitals, demographics, languages, currencies, time zones, and geographic data.
+    Essential for understanding destination countries before travel.
+    
     Args:
-        country_name: Name of the country (e.g., 'france', 'japan', 'brazil')
+        country_name: Name of the country (e.g., 'france', 'japan', 'brazil', 'australia')
     
-    Example: GET https://restcountries.com/v3.1/name/france
+    Example: https://restcountries.com/v3.1/name/france
     """
-    url = f"{COUNTRIES_API}/name/{country_name}"
-    
-    data = await make_request(url)
+    data = await make_request(f"{COUNTRIES_API}/name/{country_name}")
     
     if not data or not isinstance(data, list) or len(data) == 0:
         return f"Unable to fetch information for country: {country_name}"
     
     country = data[0]
-    
     result = f"Summarise this for me. Do not modify or add information. Country Information: {country.get('name', {}).get('common', country_name)}\n\n"
     
     # Basic info
@@ -203,8 +202,7 @@ async def get_country_info(country_name: str) -> str:
     # Languages
     languages = country.get('languages', {})
     if languages:
-        lang_list = list(languages.values())
-        result += f"🗣️  Languages: {', '.join(lang_list)}\n"
+        result += f"🗣️  Languages: {', '.join(languages.values())}\n"
     
     # Currencies
     currencies = country.get('currencies', {})
@@ -231,21 +229,25 @@ async def get_country_info(country_name: str) -> str:
     if flag:
         result += f"🏳️  Flag: {flag}\n"
     
-    result += "\n\nPlease do not add or modify any information and ONLY summarize the country information in a way that is easy to understand and use."
-    
     return result
 
 @mcp.tool()
 async def search_poi(location: str, poi_type: str = "attractions", limit: int = 10, radius: int = 10000) -> str:
     """Search for Points of Interest (POI) in a location using OpenStreetMap.
     
+    This tool finds various types of points of interest including attractions,
+    restaurants, hotels, museums, and more. Provides detailed information like
+    contact details, opening hours, and addresses for travel planning.
+    
     Args:
-        location: Location to search in (city, country, etc.)
-        poi_type: Type of POI to search for (e.g., 'restaurants', 'hotels', 'attractions', 'museums')
-        limit: Maximum number of results (default 10)
-        radius: Search radius in meters (default 10000)
+        location: Location to search in (city, country, etc.) - e.g., 'Paris', 'Tokyo'
+        poi_type: Type of POI to search for - options include 'restaurants', 'hotels', 
+                 'attractions', 'museums', 'shops', 'banks', 'pharmacies'
+        limit: Maximum number of results (default 10, max 50)
+        radius: Search radius in meters (default 10000, max 50000)
+    
+    Example: https://overpass-api.de/api/interpreter?data=[out:json];(node["amenity"="restaurant"](around:10000,48.8566,2.3522););out 10;
     """
-    # First get coordinates for the location
     coords = await get_coordinates_for_location(location)
     
     if not coords:
@@ -253,14 +255,12 @@ async def search_poi(location: str, poi_type: str = "attractions", limit: int = 
     
     latitude, longitude = coords
     
-    # Get fully qualified Overpass API URL using the overpass module
     try:
         overpass_url = get_overpass_url(poi_type, latitude, longitude, radius, limit)
     except ValueError as e:
         available_types = get_available_poi_types()
         return f"Invalid POI type: {poi_type}. Available types: {', '.join(available_types)}"
     
-    # Make the request to the Overpass API
     data = await make_request(overpass_url)
     
     if not data or 'elements' not in data:
@@ -305,22 +305,24 @@ async def search_poi(location: str, poi_type: str = "attractions", limit: int = 
     if len(elements) > limit:
         result += f"... and {len(elements) - limit} more POIs"
     
-    result += "\n\nPlease do not add or modify any information and ONLY summarize the POIs in a way that is easy to understand and use."
-    
     return result
 
 @mcp.tool()
 async def convert_currency(amount: float, from_currency: str, to_currency: str) -> str:
-    """Convert an amount from one currency to another.
+    """Convert an amount from one currency to another using real-time exchange rates.
+    
+    This tool provides accurate currency conversion using current exchange rates
+    from the exchangerate-api.com service. Essential for travel budgeting and
+    understanding local costs in your home currency.
     
     Args:
-        amount: Amount to convert
-        from_currency: Source currency code (e.g., 'USD')
-        to_currency: Target currency code (e.g., 'EUR')
-    """
-    url = f"{EXCHANGE_RATE_API}/latest/{from_currency}"
+        amount: Amount to convert (e.g., 100.0)
+        from_currency: Source currency code (e.g., 'USD', 'EUR', 'JPY', 'GBP')
+        to_currency: Target currency code (e.g., 'EUR', 'USD', 'CAD', 'AUD')
     
-    data = await make_request(url)
+    Example: https://api.exchangerate-api.com/v4/latest/USD
+    """
+    data = await make_request(f"{EXCHANGE_RATE_API}/latest/{from_currency}")
     
     if not data:
         return f"Unable to fetch exchange rates for {from_currency}."
@@ -337,12 +339,16 @@ async def convert_currency(amount: float, from_currency: str, to_currency: str) 
 
 @mcp.tool()
 async def get_travel_summary(location: str) -> str:
-    """Get a comprehensive travel summary for a location including weather, country info, and POIs.
+    """Get a comprehensive travel summary for a location.
+    
+    This tool provides a complete travel overview including country information,
+    current weather forecast, popular attractions, and upcoming public holidays.
+    Perfect for initial travel research and destination planning.
     
     Args:
-        location: Location name (country, city, etc.)
+        location: Location name (country, city, etc.) - e.g., 'Paris', 'Japan', 'Sydney'
     """
-    result = f"🌍 Travel Summary for {location}:\n{'='*50}\n\n"
+    result = f"Summarise this for me. Do not modify or add information. Travel Summary for {location}:\n{'='*50}\n\n"
     
     # Get country information
     country_info = await get_country_info(location)
@@ -358,7 +364,6 @@ async def get_travel_summary(location: str) -> str:
     
     # Get public holidays (if it's a country)
     try:
-        # Try to get country code from country info
         country_data = await make_request(f"{COUNTRIES_API}/name/{location}")
         if country_data and isinstance(country_data, list) and len(country_data) > 0:
             country_code = country_data[0].get('cca2', '')
@@ -371,5 +376,4 @@ async def get_travel_summary(location: str) -> str:
     return result
 
 if __name__ == "__main__":
-    # Initialize and run the server
     mcp.run(transport='stdio') 

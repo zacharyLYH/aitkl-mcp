@@ -19,9 +19,27 @@ Windows
 `uv init server && cd server && uv venv && .venv\Scripts\activatee && uv add mcp[cli] httpx && del main.py && touch server.py && cd ..`
 
 ## Run
-From root: `uv run --project client python client/client.py server/server.py`
+1. `uv run --project client python client/client.py server/server.py`
+2. Talk to your server like this: ```curl --location 'http://localhost:8000/query' \
+--header 'Content-Type: application/json' \
+--data '{
+    "query": "Create a travel summary for my trip to Phoenix, Arizona!"
+}'``` (Change the "query" portion)
 
-## Suggested questions
+## Troubleshooting
+1. Check if client has initialised `curl --location 'http://localhost:8000/health'`
+2. Attempt to connect to the server `curl --location 'http://localhost:8000/connect'`
+3. Check and see if you can see the list of MCP endpoints created `curl --location 'http://localhost:8000/tools'`
+
+## Suggested order of functions to work
+1. `convert_currency()`
+2. `get_weather_by_location()`
+3. `get_public_holidays()`
+4. `get_country_code()`
+5. `search_poi()`
+6. `get_travel_summary()`
+
+## Suggested questions to ask MCP
 1. What public holidays are there in US 2025?
 2. Whats the weather like in Phoenix, Arizona?
 3. Tell me more about the USA!
