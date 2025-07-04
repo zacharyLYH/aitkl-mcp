@@ -2,6 +2,17 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from mcp.server.fastmcp import FastMCP
 from overpass import get_overpass_url, get_available_poi_types
+import asyncio
+import logging
+
+# Configure logging to show on terminal
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+log = logging.getLogger("server.py")
 
 # Initialize FastMCP server
 mcp = FastMCP("travel")
@@ -14,34 +25,60 @@ EXCHANGE_RATE_API = "https://api.exchangerate-api.com/v4"
 GEOCODING_API = "https://nominatim.openstreetmap.org/search"
 USER_AGENT = "travel-mcp/1.0"
 
-# TODO: **FUTURE** Redis maybe (we can discuss this at the thing)
 # In-memory coordinate cache
 COORDINATE_CACHE: Dict[str, Tuple[float, float]] = {}
 
 async def make_request(url: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """Make a request to any API with proper error handling."""
-    # TODO: Add a backoff
+    """Make a request to any API with proper error handling and backoff."""
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "application/json"
     }
     
+    max_retries = 2
+    base_delay = 1.0
+    
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers, params=params, timeout=30.0)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            print(f"Error making request to {url}: {e}")
-            return None
+        for attempt in range(max_retries):
+            try:
+                response = await client.get(url, headers=headers, params=params, timeout=30.0)
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                # Don't retry on 4xx client errors (permanent)
+                if 400 <= e.response.status_code < 500:
+                    log.error(f"Client error {e.response.status_code} for {url}: {e}")
+                    return None
+                
+                # Retry on 5xx server errors (temporary)
+                if attempt == max_retries - 1:
+                    log.error(f"Server error {e.response.status_code} for {url} after {max_retries} attempts: {e}")
+                    return None
+                    
+                delay = base_delay * (2 ** attempt)
+                log.error(f"Server error {e.response.status_code} (attempt {attempt + 1}/{max_retries}), retrying in {delay}s...")
+                await asyncio.sleep(delay)
+                
+            except (httpx.NetworkError, httpx.TimeoutException, httpx.ConnectError) as e:
+                # Retry on network/timeout errors (temporary)
+                if attempt == max_retries - 1:
+                    log.error(f"Network/timeout error for {url} after {max_retries} attempts: {e}")
+                    return None
+                    
+                delay = base_delay * (2 ** attempt)
+                log.error(f"Network/timeout error (attempt {attempt + 1}/{max_retries}), retrying in {delay}s...")
+                await asyncio.sleep(delay)
+                
+            except Exception as e:
+                # Don't retry on other unexpected errors
+                log.error(f"Unexpected error for {url}: {e}")
+                return None
 
 async def get_coordinates_for_location(location: str) -> Optional[Tuple[float, float]]:
     """Get coordinates for a location using geocoding with caching.
     
     Example: https://nominatim.openstreetmap.org/search?q=Seattle,Washington&format=json&limit=1
     """
-    # TODO: Maybe a cache expiration (TTL) for coordinates
-    # TODO: Should we consider fuzzy matching for location names?
 
     # Check cache first
     if location.lower() in COORDINATE_CACHE:
@@ -58,19 +95,16 @@ async def get_coordinates_for_location(location: str) -> Optional[Tuple[float, f
         if lat and lon:
             try:
                 coords = (float(lat), float(lon))
-                # TODO: Add cache size limits to prevent memory issues
                 COORDINATE_CACHE[location.lower()] = coords
                 return coords
             except ValueError:
-                print(f"Invalid coordinates for {location}: lat={lat}, lon={lon}")
+                log.error(f"Invalid coordinates for {location}: lat={lat}, lon={lon}")
                 return None
     
     return None
 
 async def get_weather_forecast(latitude: float, longitude: float, days: int = 7) -> str:
     """Get weather forecast for specific coordinates."""
-    # TODO: Add input validation for latitude/longitude ranges
-    # TODO: Add weather code interpretation (convert codes to human-readable descriptions)
 
     params = {
         "latitude": latitude,
@@ -179,7 +213,7 @@ async def get_weather_by_location(location: str, days: int = 7) -> str:
 
 @mcp.tool()
 async def get_country_info(country_name: str) -> str:
-    """Get detailed information about a specific country.
+    """Get detailed information about a specific country. If the name is not a country, do not use this tool.
     
     This tool provides comprehensive country information including official names,
     capitals, demographics, languages, currencies, time zones, and geographic data.
@@ -351,7 +385,7 @@ async def convert_currency(amount: float, from_currency: str, to_currency: str) 
     return f"Summarise this for me. Do not modify or add information. Currency Conversion:\n{amount} {from_currency} = {converted_amount:.2f} {to_currency}\n(Exchange rate: 1 {from_currency} = {rate:.4f} {to_currency})"
 
 @mcp.tool()
-async def get_travel_summary(location: str) -> str:
+async def get_travel_summary_for_country(country_name: str) -> str:
     """Get a comprehensive travel summary for a location.
     
     This tool provides a complete travel overview including country information,
@@ -359,25 +393,63 @@ async def get_travel_summary(location: str) -> str:
     Perfect for initial travel research and destination planning.
     
     Args:
-        location: Location name (country, city, etc.) - e.g., 'Paris', 'Japan', 'Sydney'
+        country_name: Country name (e.g., 'France', 'Japan', 'Australia')
     """
-    result = f"Summarise this for me. Do not modify or add information. Travel Summary for {location}:\n{'='*50}\n\n"
+    result = f"Summarise this for me. Do not modify or add information. Travel Summary for {country_name}:\n{'='*50}\n\n"
     
     # Get country information
-    country_info = await get_country_info(location)
+    country_info = await get_country_info(country_name)
     result += country_info + "\n\n"
     
     # Get weather forecast
-    weather_info = await get_weather_by_location(location, days=5)
+    weather_info = await get_weather_by_location(country_name, days=5)
     result += weather_info + "\n\n"
     
     # Get popular tourist attractions
-    poi_info = await search_poi(location, "attractions", limit=5)
+    poi_info = await search_poi(country_name, "attractions", limit=5)
     result += poi_info + "\n\n"
     
-    # Get public holidays (if it's a country)
+    # Get public holidays 
     try:
-        country_data = await make_request(f"{COUNTRIES_API}/name/{location}")
+        country_data = await make_request(f"{COUNTRIES_API}/name/{country_name}")
+        if country_data and isinstance(country_data, list) and len(country_data) > 0:
+            country_code = country_data[0].get('cca2', '')
+            if country_code:
+                holidays_info = await get_public_holidays(2025, country_code)
+                result += holidays_info + "\n\n"
+    except:
+        pass  # Skip holidays if there's an error
+    
+    return result
+
+@mcp.tool()
+async def get_travel_summary_for_city(city_name: str, country_name: str) -> str:
+    """Get a comprehensive travel summary for a location.
+    
+    This tool provides a complete travel overview including country information,
+    current weather forecast, popular attractions, and upcoming public holidays.
+    Perfect for initial travel research and destination planning.
+    
+    Args:
+        city_name: City name (e.g., 'Paris', 'Tokyo', 'New York')
+        country_name: Country name (e.g., 'France', 'Japan', 'Australia')
+    """
+    result = f"Summarise this for me. Do not modify or add information. Travel Summary for {city_name}:\n{'='*50}\n\n"
+    
+    country_info = await get_country_info(country_name)
+    result += country_info + "\n\n"
+
+    # Get weather forecast
+    weather_info = await get_weather_by_location(city_name, days=5)
+    result += weather_info + "\n\n"
+    
+    # Get popular tourist attractions
+    poi_info = await search_poi(city_name, "attractions", limit=5)
+    result += poi_info + "\n\n"
+    
+    # Get public holidays 
+    try:
+        country_data = await make_request(f"{COUNTRIES_API}/name/{country_name}")
         if country_data and isinstance(country_data, list) and len(country_data) > 0:
             country_code = country_data[0].get('cca2', '')
             if country_code:

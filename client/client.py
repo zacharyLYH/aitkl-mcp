@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
 from dotenv import load_dotenv
+import logging
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -12,6 +13,15 @@ from mcp.client.stdio import stdio_client
 from gemini_service import GeminiService
 
 load_dotenv()
+
+# Configure logging to show on terminal
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+log = logging.getLogger("client.py")
 
 # =============================================================================
 # Pydantic Models for API Requests/Responses
@@ -64,17 +74,13 @@ class MCPAPIClient:
         
         Reuses existing connection if already connected to the same server.
         """
-        # TODO: Add connection health checks before reusing existing connections (might be overkill)
-        # Reuse existing connection if already connected to the same server
         if self.connected_server == self.server_script_path and self.session:
             return
 
         # Clean up existing connection if any
         if self.session:
             await self.cleanup()
-            
-        # TODO: Add timeout config for connection establishment
-        # TODO: same vibe, maybe some kind of backoff for failed connections
+
         # Set up server parameters
         server_params = StdioServerParameters(
             command="python3",
@@ -117,15 +123,81 @@ class MCPAPIClient:
             
         return tools
 
+    async def _determine_tool_calls(self, chat, query: str, available_tools):
+        """
+        Send query to Gemini and get response with potential tool calls.
+        
+        Args:
+            chat: The Gemini chat session
+            query: The user's query string
+            available_tools: List of available tools in Gemini format
+            
+        Returns:
+            The initial response from Gemini
+        """
+        # Send initial query to Gemini
+        try:
+            if available_tools:
+                which_tool_to_use = self.gemini_service.send_message(chat, query, available_tools)
+            else:
+                which_tool_to_use = self.gemini_service.send_message(chat, query)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error calling Gemini API: {str(e)}")
+        
+        return which_tool_to_use
+
+    async def _execute_tool_calls(self, chat, tools_suggested_to_use):
+        """
+        Execute tool calls from Gemini response and send results back.
+        
+        Args:
+            chat: The Gemini chat session
+            response: The initial response from Gemini
+            
+        Returns:
+            Tuple of (final_text_list, tools_used_list)
+        """
+        final_text = []
+        tools_used = []
+        # Handle tool calls from Gemini
+        try:
+            log.info(f"tools_suggested_to_use: {tools_suggested_to_use}")
+            for part in tools_suggested_to_use.candidates[0].content.parts:
+                if hasattr(part, 'function_call'):
+                    tool_name = part.function_call.name
+                    tool_args = part.function_call.args
+                    tools_used.append(tool_name)
+
+                    # Optional: Add tool execution timeout to prevent hanging
+                    # Execute tool call
+                    try:
+                        tool_call_result = await self.session.call_tool(tool_name, tool_args)
+                        log.info(f"Tool call result: {tool_call_result}")
+
+                        # Continue conversation with tool calling results
+                        gemini_interpret_tool_result = self.gemini_service.send_tool_result(chat, tool_name, tool_call_result.content)
+
+                        final_text.append(gemini_interpret_tool_result.text)
+                    except Exception as e:
+                        final_text.append(f"_execute_tool_calls some gemini api call failed: {str(e)}")
+                elif hasattr(part, 'text'):
+                    final_text.append(part.text)
+                else:
+                    final_text.append(f"_execute_tool_calls result is neither a tool call nor text: {str(part)}")
+        except Exception as e:
+            final_text.append(f"_execute_tool_calls error: {str(e)}")
+
+        return final_text, tools_used
+
     async def process_query(self, query: str) -> Dict[str, Any]:
         """
         Process a query using Gemini AI and available MCP tools.
         
         This method:
         1. Ensures connection to MCP server
-        2. Gets available tools and converts them to Gemini format
-        3. Sends query to Gemini with available tools
-        4. Processes tool calls and executes them
+        2. Initializes chat session and gets available tools
+        3. Determines which tools to use via Gemini
+        4. Executes tool calls and processes results
         5. Returns final response with tools used
         
         Args:
@@ -139,57 +211,16 @@ class MCPAPIClient:
         """
         if not self.session:
             raise HTTPException(status_code=400, detail="Not connected to any server")
-        # Initialize Gemini chat session
-        chat = self.gemini_service.start_chat()
 
-        # Get available tools and convert to Gemini format
+        # Initialize Gemini chat session and get available tools
+        chat = self.gemini_service.start_chat()
         response = await self.session.list_tools()
         available_tools = self.gemini_service.convert_mcp_tools_to_gemini_format(response.tools)
-        tools_used = []
-
-        # Send initial query to Gemini
-        try:
-            if available_tools:
-                response = self.gemini_service.send_message(chat, query, available_tools)
-            else:
-                response = self.gemini_service.send_message(chat, query)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error calling Gemini API: {str(e)}")
-
-        # TODO: Tool execution logic to go into separate method for better maintainability perhaps?
-        # I wonder if we can abstract this looping logic in a way that's easier to teach/share to the crowd?
-        final_text = []
-
-        # TODO: Handle case where response has no candidates or content
-        # Handle tool calls from Gemini
-        try:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, 'function_call'):
-                    tool_name = part.function_call.name
-                    tool_args = part.function_call.args
-                    tools_used.append(tool_name)
-
-                    # TODO: Add tool execution timeout to prevent hanging
-                    # Execute tool call
-                    try:
-                        result = await self.session.call_tool(tool_name, tool_args)
-
-                        # Continue conversation with tool calling results
-                        chat.send_message(f"Tool calling result: {result.content}")
-
-                        # Get next response from Gemini
-                        next_response = self.gemini_service.send_tool_result(chat, tool_name, result.content)
-
-                        final_text.append(next_response.text)
-                    except Exception as e:
-                        final_text.append(f"Error executing tool {tool_name}: {str(e)}")
-                else:
-                    # TODO: Handle non-tool response parts (regular text responses)
-                    # are we missing this? not sure if Im misunderstanding the code
-                    if hasattr(part, 'text'):
-                        final_text.append(part.text)
-        except Exception as e:
-            final_text.append(f"Error processing response: {str(e)}")
+        # Determine which tools to use
+        which_tools_to_use = await self._determine_tool_calls(chat, query, available_tools)
+        
+        # Execute tool calls and get results
+        final_text, tools_used = await self._execute_tool_calls(chat, which_tools_to_use)
 
         return {
             "response": "\n".join(final_text) if final_text else "No response generated",
@@ -198,14 +229,11 @@ class MCPAPIClient:
     
     async def cleanup(self):
         """Clean up resources and close connections"""
-        # TODO: Add graceful shutdown with timeout - may be overkill again
-        # adding a possible change below
         try:
             if self.exit_stack:
                 await self.exit_stack.aclose()
         except Exception as e:
-            # TODO: Add proper logging for cleanup errors
-            print(f"Warning: Error during cleanup: {e}")
+            log.error(f"Warning: Error during cleanup: {e}")
         finally:
             self.session = None
             self.connected_server = None
