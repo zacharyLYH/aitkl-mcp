@@ -7,12 +7,22 @@ load_dotenv()  # load environment variables from .env
 
 class GeminiService:
     def __init__(self):
+        # FIXME: Readme & codebase use different env vars for the api key
+        # adding suggestion below
+
+        api_key = os.getenv('GEMINI_API_KEY')  # Fixed: was 'GOOGLE_API_KEY'
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY environment variable is required")
+
         # Configure Gemini API
-        genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
+        genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel(os.getenv('GEMINI_MODEL_NAME'))
 
     def convert_mcp_tools_to_gemini_format(self, mcp_tools: List[Any]) -> List[Dict[str, Any]]:
         """Convert MCP tools to Gemini's FunctionDeclaration format"""
+        # conversion logic could be extracted to a separate utility class 
+        # ~~easier to explain on the day
+
         available_tools = []
         
         for tool in mcp_tools:
@@ -73,6 +83,7 @@ class GeminiService:
             max_output_tokens=1000,
         )
         
+        # TODO: Add retry logic with some kind of backoff for API failures
         if tools:
             return chat.send_message(
                 message,
@@ -87,5 +98,7 @@ class GeminiService:
 
     def send_tool_result(self, chat, tool_name: str, tool_result: str) -> Any:
         """Send tool result back to Gemini and get response"""
+        # TODO: Improve tool result formatting for better context
+        # Might even be better to use some kind of xml / json structuring for better LLM interpretation?
         message = f"Tool {tool_name} returned: {tool_result}"
         return self.send_message(chat, message)

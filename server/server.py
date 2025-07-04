@@ -14,11 +14,13 @@ EXCHANGE_RATE_API = "https://api.exchangerate-api.com/v4"
 GEOCODING_API = "https://nominatim.openstreetmap.org/search"
 USER_AGENT = "travel-mcp/1.0"
 
+# TODO: **FUTURE** Redis maybe (we can discuss this at the thing)
 # In-memory coordinate cache
 COORDINATE_CACHE: Dict[str, Tuple[float, float]] = {}
 
 async def make_request(url: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Make a request to any API with proper error handling."""
+    # TODO: Add a backoff
     headers = {
         "User-Agent": USER_AGENT,
         "Accept": "application/json"
@@ -38,6 +40,9 @@ async def get_coordinates_for_location(location: str) -> Optional[Tuple[float, f
     
     Example: https://nominatim.openstreetmap.org/search?q=Seattle,Washington&format=json&limit=1
     """
+    # TODO: Maybe a cache expiration (TTL) for coordinates
+    # TODO: Should we consider fuzzy matching for location names?
+
     # Check cache first
     if location.lower() in COORDINATE_CACHE:
         return COORDINATE_CACHE[location.lower()]
@@ -51,14 +56,22 @@ async def get_coordinates_for_location(location: str) -> Optional[Tuple[float, f
         lat = result.get('lat')
         lon = result.get('lon')
         if lat and lon:
-            coords = (float(lat), float(lon))
-            COORDINATE_CACHE[location.lower()] = coords
-            return coords
+            try:
+                coords = (float(lat), float(lon))
+                # TODO: Add cache size limits to prevent memory issues
+                COORDINATE_CACHE[location.lower()] = coords
+                return coords
+            except ValueError:
+                print(f"Invalid coordinates for {location}: lat={lat}, lon={lon}")
+                return None
     
     return None
 
 async def get_weather_forecast(latitude: float, longitude: float, days: int = 7) -> str:
     """Get weather forecast for specific coordinates."""
+    # TODO: Add input validation for latitude/longitude ranges
+    # TODO: Add weather code interpretation (convert codes to human-readable descriptions)
+
     params = {
         "latitude": latitude,
         "longitude": longitude,
@@ -376,4 +389,4 @@ async def get_travel_summary(location: str) -> str:
     return result
 
 if __name__ == "__main__":
-    mcp.run(transport='stdio') 
+    mcp.run(transport='stdio')

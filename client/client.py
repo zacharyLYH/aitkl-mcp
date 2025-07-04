@@ -64,6 +64,7 @@ class MCPAPIClient:
         
         Reuses existing connection if already connected to the same server.
         """
+        # TODO: Add connection health checks before reusing existing connections (might be overkill)
         # Reuse existing connection if already connected to the same server
         if self.connected_server == self.server_script_path and self.session:
             return
@@ -72,6 +73,8 @@ class MCPAPIClient:
         if self.session:
             await self.cleanup()
             
+        # TODO: Add timeout config for connection establishment
+        # TODO: same vibe, maybe some kind of backoff for failed connections
         # Set up server parameters
         server_params = StdioServerParameters(
             command="python3",
@@ -104,7 +107,7 @@ class MCPAPIClient:
         response = await self.session.list_tools()
         tools = []
         
-        for tool in response.tools: #how to add description and input schema?
+        for tool in response.tools:
             tool_info = ToolInfo(
                 name=tool.name,
                 description=tool.description,
@@ -136,7 +139,6 @@ class MCPAPIClient:
         """
         if not self.session:
             raise HTTPException(status_code=400, detail="Not connected to any server")
-            
         # Initialize Gemini chat session
         chat = self.gemini_service.start_chat()
 
@@ -154,7 +156,11 @@ class MCPAPIClient:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error calling Gemini API: {str(e)}")
 
+        # TODO: Tool execution logic to go into separate method for better maintainability perhaps?
+        # I wonder if we can abstract this looping logic in a way that's easier to teach/share to the crowd?
         final_text = []
+
+        # TODO: Handle case where response has no candidates or content
         # Handle tool calls from Gemini
         try:
             for part in response.candidates[0].content.parts:
@@ -162,6 +168,8 @@ class MCPAPIClient:
                     tool_name = part.function_call.name
                     tool_args = part.function_call.args
                     tools_used.append(tool_name)
+
+                    # TODO: Add tool execution timeout to prevent hanging
                     # Execute tool call
                     try:
                         result = await self.session.call_tool(tool_name, tool_args)
@@ -175,20 +183,32 @@ class MCPAPIClient:
                         final_text.append(next_response.text)
                     except Exception as e:
                         final_text.append(f"Error executing tool {tool_name}: {str(e)}")
+                else:
+                    # TODO: Handle non-tool response parts (regular text responses)
+                    # are we missing this? not sure if Im misunderstanding the code
+                    if hasattr(part, 'text'):
+                        final_text.append(part.text)
         except Exception as e:
             final_text.append(f"Error processing response: {str(e)}")
 
         return {
-            "response": "\n".join(final_text),
+            "response": "\n".join(final_text) if final_text else "No response generated",
             "tools_used": tools_used
         }
     
     async def cleanup(self):
         """Clean up resources and close connections"""
-        if self.exit_stack:
-            await self.exit_stack.aclose()
-        self.session = None
-        self.connected_server = None
+        # TODO: Add graceful shutdown with timeout - may be overkill again
+        # adding a possible change below
+        try:
+            if self.exit_stack:
+                await self.exit_stack.aclose()
+        except Exception as e:
+            # TODO: Add proper logging for cleanup errors
+            print(f"Warning: Error during cleanup: {e}")
+        finally:
+            self.session = None
+            self.connected_server = None
 
 # =============================================================================
 # FastAPI Application Setup
@@ -288,4 +308,4 @@ async def health_check():
 # =============================================================================
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)
