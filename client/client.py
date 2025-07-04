@@ -14,6 +14,19 @@ from gemini_service import GeminiService
 
 load_dotenv()
 
+# =============================================================================
+# Configuration
+# =============================================================================
+
+DEFAULT_SERVER_PATH = "server/server.py"
+DEFAULT_PYTHON_COMMAND = "python3"
+API_HOST = "0.0.0.0"
+API_PORT = 8000
+
+# =============================================================================
+# Logging Setup
+# =============================================================================
+
 # Configure logging to show on terminal
 logging.basicConfig(
     level=logging.INFO,
@@ -21,7 +34,7 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-log = logging.getLogger("client.py")
+logger = logging.getLogger("client.py")
 
 # =============================================================================
 # Pydantic Models for API Requests/Responses
@@ -66,7 +79,7 @@ class MCPAPIClient:
         self.exit_stack = AsyncExitStack()
         self.gemini_service = GeminiService()
         self.connected_server: Optional[str] = None
-        self.server_script_path: Optional[str] = "server/server.py"
+        self.server_script_path: Optional[str] = DEFAULT_SERVER_PATH
 
     async def connect_to_server(self):
         """
@@ -74,24 +87,37 @@ class MCPAPIClient:
         
         Reuses existing connection if already connected to the same server.
         """
-        if self.connected_server == self.server_script_path and self.session:
+        if self._is_already_connected():
             return
 
         # Clean up existing connection if any
+        await self._cleanup_existing_connection()
+        await self._establish_new_connection()
+
+    def _is_already_connected(self) -> bool:
+        return (self.connected_server == self.server_script_path and 
+                self.session is not None)
+
+    async def _cleanup_existing_connection(self):
         if self.session:
             await self.cleanup()
 
+    async def _establish_new_connection(self):
         # Set up server parameters
         server_params = StdioServerParameters(
-            command="python3",
+            command=DEFAULT_PYTHON_COMMAND,
             args=[self.server_script_path],
             env=None
         )
         
         # Establish connection
-        stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
+        stdio_transport = await self.exit_stack.enter_async_context(
+            stdio_client(server_params)
+        )
         self.stdio, self.write = stdio_transport
-        self.session = await self.exit_stack.enter_async_context(ClientSession(self.stdio, self.write))
+        self.session = await self.exit_stack.enter_async_context(
+            ClientSession(self.stdio, self.write)
+        )
         
         # Initialize the session
         await self.session.initialize()
@@ -107,87 +133,24 @@ class MCPAPIClient:
         Raises:
             HTTPException: If not connected to any server
         """
-        if not self.session:
-            raise HTTPException(status_code=400, detail="Not connected to any server")
-            
-        response = await self.session.list_tools()
+        self._ensure_connected()
+        
+        server_response = await self.session.list_tools()
         tools = []
         
-        for tool in response.tools:
+        for tool in server_response.tools:
             tool_info = ToolInfo(
                 name=tool.name,
                 description=tool.description,
-                input_schema=tool.inputSchema if hasattr(tool, 'inputSchema') else None
+                input_schema=getattr(tool, 'inputSchema', None)
             )
             tools.append(tool_info)
             
         return tools
 
-    async def _determine_tool_calls(self, chat, query: str, available_tools):
-        """
-        Send query to Gemini and get response with potential tool calls.
-        
-        Args:
-            chat: The Gemini chat session
-            query: The user's query string
-            available_tools: List of available tools in Gemini format
-            
-        Returns:
-            The initial response from Gemini
-        """
-        # Send initial query to Gemini
-        try:
-            if available_tools:
-                which_tool_to_use = self.gemini_service.send_message(chat, query, available_tools)
-            else:
-                which_tool_to_use = self.gemini_service.send_message(chat, query)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error calling Gemini API: {str(e)}")
-        
-        return which_tool_to_use
-
-    async def _execute_tool_calls(self, chat, tools_suggested_to_use):
-        """
-        Execute tool calls from Gemini response and send results back.
-        
-        Args:
-            chat: The Gemini chat session
-            response: The initial response from Gemini
-            
-        Returns:
-            Tuple of (final_text_list, tools_used_list)
-        """
-        final_text = []
-        tools_used = []
-        # Handle tool calls from Gemini
-        try:
-            log.info(f"tools_suggested_to_use: {tools_suggested_to_use}")
-            for part in tools_suggested_to_use.candidates[0].content.parts:
-                if hasattr(part, 'function_call'):
-                    tool_name = part.function_call.name
-                    tool_args = part.function_call.args
-                    tools_used.append(tool_name)
-
-                    # Optional: Add tool execution timeout to prevent hanging
-                    # Execute tool call
-                    try:
-                        tool_call_result = await self.session.call_tool(tool_name, tool_args)
-                        log.info(f"Tool call result: {tool_call_result}")
-
-                        # Continue conversation with tool calling results
-                        gemini_interpret_tool_result = self.gemini_service.send_tool_result(chat, tool_name, tool_call_result.content)
-
-                        final_text.append(gemini_interpret_tool_result.text)
-                    except Exception as e:
-                        final_text.append(f"_execute_tool_calls some gemini api call failed: {str(e)}")
-                elif hasattr(part, 'text'):
-                    final_text.append(part.text)
-                else:
-                    final_text.append(f"_execute_tool_calls result is neither a tool call nor text: {str(part)}")
-        except Exception as e:
-            final_text.append(f"_execute_tool_calls error: {str(e)}")
-
-        return final_text, tools_used
+    def _ensure_connected(self):
+        if not self.session:
+            raise HTTPException(status_code=400, detail="Not connected to any server")
 
     async def process_query(self, query: str) -> Dict[str, Any]:
         """
@@ -209,23 +172,102 @@ class MCPAPIClient:
         Raises:
             HTTPException: If not connected to server or API errors occur
         """
-        if not self.session:
-            raise HTTPException(status_code=400, detail="Not connected to any server")
+        self._ensure_connected()
 
-        # Initialize Gemini chat session and get available tools
-        chat = self.gemini_service.start_chat()
-        response = await self.session.list_tools()
-        available_tools = self.gemini_service.convert_mcp_tools_to_gemini_format(response.tools)
+        # Initialize Gemini chat session and get available tools in server.py
+        chat_session = self.gemini_service.start_chat()
+        server_response = await self.session.list_tools()
+        available_tools = self.gemini_service.convert_mcp_tools_to_gemini_format(server_response.tools)
+        
         # Determine which tools to use
-        which_tools_to_use = await self._determine_tool_calls(chat, query, available_tools)
+        gemini_response = await self.ask_gemini_which_tool_to_use(chat_session, query, available_tools)
         
         # Execute tool calls and get results
-        final_text, tools_used = await self._execute_tool_calls(chat, which_tools_to_use)
+        final_response, tools_used = await self._execute_tool_and_gemini_summarise(chat_session, gemini_response)
 
         return {
-            "response": "\n".join(final_text) if final_text else "No response generated",
+            "response": self._format_final_response(final_response),
             "tools_used": tools_used
         }
+
+    async def ask_gemini_which_tool_to_use(self, chat_session, query: str, available_tools):
+        """
+        Send query to Gemini and get response with potential tool calls.
+        
+        Args:
+            chat_session: The Gemini chat session
+            query: The user's query string
+            available_tools: List of available tools in Gemini format
+            
+        Returns:
+            The initial response from Gemini
+        """
+        # Send initial query to Gemini
+        try:
+            if available_tools:
+                return self.gemini_service.send_message(chat_session, query, available_tools)
+            else:
+                return self.gemini_service.send_message(chat_session, query)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error calling Gemini API: {str(e)}")
+
+    async def _execute_tool_and_gemini_summarise(self, chat_session, gemini_response):
+        """
+        Execute tool calls from Gemini response and send results back.
+        
+        Args:
+            chat_session: The Gemini chat session
+            gemini_response: The initial response from Gemini
+            
+        Returns:
+            Tuple of (final_text_list, tools_used_list)
+        """
+        response_parts = []
+        tools_used = []
+
+        try:
+            logger.info(f"Processing Gemini response: {gemini_response}")
+            
+            for part in gemini_response.candidates[0].content.parts:
+                if hasattr(part, 'function_call'):
+                    part_response, tool_name = await self._execute_tool_call(chat_session, part)
+                    response_parts.append(part_response)
+                    tools_used.append(tool_name)
+                elif hasattr(part, 'text'):
+                    response_parts.append(part.text)
+                else:
+                    response_parts.append(f"Unknown response type: {str(part)}")
+                    
+        except Exception as e:
+            response_parts.append(f"Error processing response: {str(e)}")
+
+        return response_parts, tools_used
+
+    async def _execute_tool_call(self, chat_session, function_call_part):
+        tool_name = function_call_part.function_call.name
+        tool_args = function_call_part.function_call.args
+
+        # Optional: Add tool execution timeout to prevent hanging
+        # Execute tool call
+        try:
+            tool_result = await self.session.call_tool(tool_name, tool_args)
+            logger.info(f"\n\nTool '{tool_name}' executed successfully\n\n")
+
+            # Continue conversation with tool calling results
+            gemini_interpretation = self.gemini_service.send_tool_result(
+                chat_session, tool_name, tool_result.content
+            )
+            return gemini_interpretation.text, tool_name
+            
+        except Exception as e:
+            error_message = f"Tool '{tool_name}' failed: {str(e)}"
+            logger.error(error_message)
+            return error_message, tool_name
+
+    def _format_final_response(self, response_parts: List[str]) -> str:
+        if not response_parts:
+            return "No response generated"
+        return "\n".join(response_parts)
     
     async def cleanup(self):
         """Clean up resources and close connections"""
@@ -233,7 +275,7 @@ class MCPAPIClient:
             if self.exit_stack:
                 await self.exit_stack.aclose()
         except Exception as e:
-            log.error(f"Warning: Error during cleanup: {e}")
+            logger.error(f"Warning: Error during cleanup: {e}")
         finally:
             self.session = None
             self.connected_server = None
@@ -302,7 +344,7 @@ async def connect_to_server():
     """
     try:
         await mcp_client.connect_to_server()    
-        return {"message": f"Connected to server"}
+        return {"message": "Connected to server"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -336,4 +378,4 @@ async def health_check():
 # =============================================================================
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=API_HOST, port=API_PORT)
