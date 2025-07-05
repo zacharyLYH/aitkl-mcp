@@ -2,17 +2,38 @@ from typing import Dict, Any, List, Optional
 import os
 import google.generativeai as genai
 from dotenv import load_dotenv
+import logging
+
+# Configure logging to show on terminal
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+log = logging.getLogger("gemini_service.py")
 
 load_dotenv()  # load environment variables from .env
 
 class GeminiService:
     def __init__(self):
+        api_key = os.getenv('GEMINI_API_KEY')  
+        if not api_key:
+            log.error("GEMINI_API_KEY environment variable is required")
+            raise ValueError("GEMINI_API_KEY environment variable is required")
+
         # Configure Gemini API
-        genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel(os.getenv('GEMINI_MODEL_NAME'))
+        try:
+            genai.configure(api_key=api_key)
+            self.model = genai.GenerativeModel(os.getenv('GEMINI_MODEL_NAME'))
+            log.info("Gemini service initialized successfully")
+        except Exception as e:
+            log.error(f"Error initializing Gemini service: {e}")
+            raise
 
     def convert_mcp_tools_to_gemini_format(self, mcp_tools: List[Any]) -> List[Dict[str, Any]]:
         """Convert MCP tools to Gemini's FunctionDeclaration format"""
+
         available_tools = []
         
         for tool in mcp_tools:
@@ -58,9 +79,10 @@ class GeminiService:
                 }
                 available_tools.append(gemini_tool)
             except Exception as e:
-                print(f"Warning: Could not convert tool {tool.name}: {e}")
+                log.error(f"Error converting tool {tool.name}: {e}")
                 continue
                 
+        log.info(f"Successfully converted {len(available_tools)} tools to Gemini format")
         return available_tools
 
     def start_chat(self):
@@ -73,19 +95,27 @@ class GeminiService:
             max_output_tokens=1000,
         )
         
-        if tools:
-            return chat.send_message(
-                message,
-                generation_config=generation_config,
-                tools=tools
-            )
-        else:
-            return chat.send_message(
-                message,
-                generation_config=generation_config
-            )
+        try:
+            if tools:
+                return chat.send_message(
+                    message,
+                    generation_config=generation_config,
+                    tools=tools
+                )
+            else:
+                return chat.send_message(
+                    message,
+                    generation_config=generation_config
+                )
+        except Exception as e:
+            log.error(f"Error sending message to Gemini: {e}")
+            raise
 
     def send_tool_result(self, chat, tool_name: str, tool_result: str) -> Any:
         """Send tool result back to Gemini and get response"""
-        message = f"Tool {tool_name} returned: {tool_result}"
-        return self.send_message(chat, message)
+        try:
+            message = f"Tool {tool_name} returned: {tool_result}"
+            return self.send_message(chat, message)
+        except Exception as e:
+            log.error(f"Error sending tool result for {tool_name}: {e}")
+            raise

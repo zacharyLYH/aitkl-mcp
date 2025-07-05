@@ -57,7 +57,7 @@ uv init server && cd server && uv venv && .venv\Scripts\activate && uv add "mcp[
    curl --location 'http://localhost:8000/query' \
    --header 'Content-Type: application/json' \
    --data '{
-       "query": "Create a travel summary for my trip to Phoenix, Arizona!"
+       "query": "Create a travel summary for my trip to France!"
    }'
    ```
 
@@ -87,7 +87,8 @@ uv init server && cd server && uv venv && .venv\Scripts\activate && uv add "mcp[
 3. `get_public_holidays()`
 4. `get_country_code()`
 5. `search_poi()`
-6. `get_travel_summary()`
+6. `get_travel_summary_for_country()`
+7. `get_travel_summary_for_city()`
 
 ### Sample Questions to Test MCP
 
@@ -96,4 +97,5 @@ uv init server && cd server && uv venv && .venv\Scripts\activate && uv add "mcp[
 3. Tell me more about the USA!
 4. What restaurants are in Phoenix, Arizona?
 5. I'll need 4000 USD for my trip. How much is that in Malaysian Ringgit?
-6. Create a travel summary for my trip to Phoenix, Arizona!
+6. Create a travel summary for my trip to USA!
+7. Create a travel summary for my trip to Frankfurt, Germany!
