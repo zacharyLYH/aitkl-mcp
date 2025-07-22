@@ -180,14 +180,14 @@ class MCPAPIClient:
         available_tools = self.gemini_service.convert_mcp_tools_to_gemini_format(server_response.tools)
         
         # Determine which tools to use
-        gemini_response = await self.ask_gemini_which_tool_to_use(chat_session, query, available_tools)
+        tools_to_use = await self.ask_gemini_which_tool_to_use(chat_session, query, available_tools)
         
         # Execute tool calls and get results
-        final_response, tools_used = await self._execute_tool_and_gemini_summarise(chat_session, gemini_response)
+        final_response = await self._execute_tool_and_gemini_summarise(chat_session, tools_to_use)
 
         return {
             "response": self._format_final_response(final_response),
-            "tools_used": tools_used
+            "tools_used": tools_to_use
         }
 
     async def ask_gemini_which_tool_to_use(self, chat_session, query: str, available_tools):
@@ -200,7 +200,7 @@ class MCPAPIClient:
             available_tools: List of available tools in Gemini format
             
         Returns:
-            The initial response from Gemini
+            The mcp server functions that gemini thinks should help solve the user's query
         """
         # Send initial query to Gemini
         try:
@@ -211,28 +211,26 @@ class MCPAPIClient:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error calling Gemini API: {str(e)}")
 
-    async def _execute_tool_and_gemini_summarise(self, chat_session, gemini_response):
+    async def _execute_tool_and_gemini_summarise(self, chat_session, tools_to_use) -> str:
         """
         Execute tool calls from Gemini response and send results back.
         
         Args:
             chat_session: The Gemini chat session
-            gemini_response: The initial response from Gemini
+            tools_to_use: The tools to use
             
         Returns:
-            Tuple of (final_text_list, tools_used_list)
+            Summarized response from Gemini
         """
         response_parts = []
-        tools_used = []
 
         try:
-            logger.info(f"Processing Gemini response: {gemini_response}")
+            logger.info(f"Processing Gemini response: {tools_to_use}")
             
-            for part in gemini_response.candidates[0].content.parts:
+            for part in tools_to_use.candidates[0].content.parts:
                 if hasattr(part, 'function_call'):
-                    part_response, tool_name = await self._execute_tool_call(chat_session, part)
-                    response_parts.append(part_response)
-                    tools_used.append(tool_name)
+                    tool_response = await self._execute_tool_call(chat_session, part)
+                    response_parts.append(tool_response)
                 elif hasattr(part, 'text'):
                     response_parts.append(part.text)
                 else:
@@ -241,7 +239,7 @@ class MCPAPIClient:
         except Exception as e:
             response_parts.append(f"Error processing response: {str(e)}")
 
-        return response_parts, tools_used
+        return response_parts
 
     async def _execute_tool_call(self, chat_session, function_call_part):
         tool_name = function_call_part.function_call.name
@@ -257,12 +255,12 @@ class MCPAPIClient:
             gemini_interpretation = self.gemini_service.send_tool_result(
                 chat_session, tool_name, tool_result.content
             )
-            return gemini_interpretation.text, tool_name
+            return gemini_interpretation.text
             
         except Exception as e:
             error_message = f"Tool '{tool_name}' failed: {str(e)}"
             logger.error(error_message)
-            return error_message, tool_name
+            return error_message
 
     def _format_final_response(self, response_parts: List[str]) -> str:
         if not response_parts:

@@ -85,7 +85,7 @@ uv init server && cd server && uv venv && .venv\Scripts\activate && uv add "mcp[
 1. `convert_currency()`
 2. `get_weather_by_location()`
 3. `get_public_holidays()`
-4. `get_country_code()`
+4. `get_country_info()`
 5. `search_poi()`
 6. `get_travel_summary_for_country()`
 7. `get_travel_summary_for_city()`

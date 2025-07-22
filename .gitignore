@@ -1,3 +1,5 @@
 .env
 client/__pycache__/
 server/__pycache__/
+client/.DS_Store
+.DS_Store
