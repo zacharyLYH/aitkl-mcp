@@ -181,13 +181,22 @@ class MCPAPIClient:
         
         # Determine which tools to use
         tools_to_use = await self.ask_gemini_which_tool_to_use(chat_session, query, available_tools)
+
+        # Extract tool names for the response because tools_to_use is a json object and for cosmetic reasons we only want to see a string of tool names returned
+        tools_used_names = []
+        try:
+            for part in tools_to_use.candidates[0].content.parts:
+                if hasattr(part, 'function_call'):
+                    tools_used_names.append(part.function_call.name)
+        except Exception as e:
+            logger.warning(f"Could not extract tool names: {e}")
         
         # Execute tool calls and get results
         final_response = await self._execute_tool_and_gemini_summarise(chat_session, tools_to_use)
 
         return {
             "response": self._format_final_response(final_response),
-            "tools_used": tools_to_use
+            "tools_used": tools_used_names
         }
 
     async def ask_gemini_which_tool_to_use(self, chat_session, query: str, available_tools):
@@ -225,8 +234,6 @@ class MCPAPIClient:
         response_parts = []
 
         try:
-            logger.info(f"Processing Gemini response: {tools_to_use}")
-            
             for part in tools_to_use.candidates[0].content.parts:
                 if hasattr(part, 'function_call'):
                     tool_response = await self._execute_tool_call(chat_session, part)

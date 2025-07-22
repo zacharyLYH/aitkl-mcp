@@ -93,9 +93,9 @@ uv init server && cd server && uv venv && .venv\Scripts\activate && uv add "mcp[
 ### Sample Questions to Test MCP
 
 1. What public holidays are there in US 2025?
-2. What's the weather like in Phoenix, Arizona?
+2. What is the weather like in Phoenix, Arizona?
 3. Tell me more about the USA!
 4. What restaurants are in Phoenix, Arizona?
-5. I'll need 4000 USD for my trip. How much is that in Malaysian Ringgit?
+5. I will need 4000 USD for my trip. How much is that in Malaysian Ringgit?
 6. Create a travel summary for my trip to USA!
 7. Create a travel summary for my trip to Frankfurt, Germany!
