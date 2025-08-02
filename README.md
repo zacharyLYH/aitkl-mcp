@@ -16,24 +16,24 @@ A travel assistant MCP (Model Context Protocol) project that provides AI-powered
 
 **Non-Windows:**
 ```bash
-uv init client && cd client && uv venv && source .venv/bin/activate && uv add mcp anthropic python-dotenv && rm -rf main.py && touch client.py && cd ..
+cd client && uv venv && source .venv/bin/activate && uv add mcp anthropic python-dotenv && cd ..
 ```
 
 **Windows:**
 ```bash
-uv init client && cd client && uv venv && .venv\Scripts\activate && uv add mcp anthropic python-dotenv && del main.py && touch client.py && cd ..
+cd client && uv venv && .venv\Scripts\activate && uv add mcp anthropic python-dotenv && cd ..
 ```
 
 ### Server Setup
 
 **Non-Windows:**
 ```bash
-uv init server && cd server && uv venv && source .venv/bin/activate && uv add "mcp[cli]" httpx && rm -rf main.py && touch server.py && cd ..
+cd server && uv venv && source .venv/bin/activate && uv add "mcp[cli]" httpx && cd ..
 ```
 
 **Windows:**
 ```bash
-uv init server && cd server && uv venv && .venv\Scripts\activate && uv add "mcp[cli]" httpx && del main.py && touch server.py && cd ..
+cd server && uv venv && .venv\Scripts\activate && uv add "mcp[cli]" httpx && cd ..
 ```
 
 ## Running the Application
@@ -92,10 +92,10 @@ uv init server && cd server && uv venv && .venv\Scripts\activate && uv add "mcp[
 
 ### Sample Questions to Test MCP
 
-1. What public holidays are there in US 2025?
+1. I will need 4000 USD for my trip. How much is that in Malaysian Ringgit?
 2. What is the weather like in Phoenix, Arizona?
-3. Tell me more about the USA!
-4. What restaurants are in Phoenix, Arizona?
-5. I will need 4000 USD for my trip. How much is that in Malaysian Ringgit?
+3. What public holidays are there in US 2025? 
+4. Tell me more about the USA!
+5. What restaurants are in Phoenix, Arizona?
 6. Create a travel summary for my trip to USA!
 7. Create a travel summary for my trip to Frankfurt, Germany!
